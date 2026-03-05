@@ -1,3 +1,5 @@
+import tkinter as tk
+from tkinter import filedialog
 import dash
 from dash import dcc, html, Input, Output
 import plotly.graph_objects as go
@@ -7,7 +9,12 @@ import time
 logRate = 5  # times per second
 
 # Load and process data
-dataFile = open("Example Data Sets\\VacuumTestData.txt")
+root = tk.Tk()
+root.withdraw()
+
+filePath = filedialog.askopenfilename(title="Select Pressure Data File", filetypes=[("Text Files", "*.txt")])
+
+dataFile = open(filePath)
 data = dataFile.read()
 
 def processData(data):
