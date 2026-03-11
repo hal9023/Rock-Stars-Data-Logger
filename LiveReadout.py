@@ -10,6 +10,9 @@ import serial
 from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog
+from tkinter import ttk
+import socket
+
 
 logRate = 5  # times per second
 MAX_BUFFER_SIZE = 500  # Keep last 500 data points (~100 seconds at 5Hz)
@@ -20,9 +23,12 @@ data_lock = threading.Lock()
 is_recording = False
 connection_status = "Disconnected"
 start_time = None
-data_mode = None  # "live" or "file"
+data_mode = None  # "live" or "file" or "wifi," live data mode means reading data over Serial.
 loaded_file_data = None  # For file mode
 loaded_file_path = None
+arduino_ip = '192.168.1.100' # Make sure to set proper IP and port for your Arduino WiFi module
+arduino_port = 12345
+
 
 def receive_data_from_arduino(port='COM4', baudrate=9600, log_path='arduino_log.txt'):
     """
@@ -72,7 +78,45 @@ def receive_data_from_arduino(port='COM4', baudrate=9600, log_path='arduino_log.
     except Exception as e:
         connection_status = f"Connection Error: {str(e)}"
         print(f"Failed to connect to Arduino: {e}")
+def receive_wifi(ip, port, log_path='arduino_log.txt'):
+    global connection_status, is_recording, start_time, sock
+    
+    try: # Connect to Arduino via Wifi
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind((ip, port))
 
+        time.sleep(2) # Wait for connection
+
+        connection_status = "Connected"
+        is_recording = True
+        start_time = time.time()
+        print(f"Connected to Arduino on {ip}:{port}")
+
+        with open(log_path, 'a') as logfile:
+            while is_recording:
+                try:
+                    data, addr = sock.recvfrom(1024) # buffer size
+                    line = data.decode('utf-8').strip()
+                    if line:
+                        try:
+                            pressure_value = float(line)
+                            with data_lock:
+                                data_buffer.append(pressure_value)
+                            logfile.write(f"{pressure_value}\n")
+                            logfile.flush()
+                            print(f"[DEBUG] Received from Arduino: {pressure_value}")
+                        except ValueError:
+                            print(f"Could not parse: {line}")
+                except Exception as e:
+                    print(f"Error receiving from socket: {e}")
+                    connection_status = "Reading Error"
+                    is_recording = False
+                    break
+        sock.close()
+    except Exception as e:
+        connection_status = f"Connection Error: {str(e)}"
+        print(f"Failed to connect to Arduino: {e}")
+    
 def load_file_data(file_path):
     """Load data from a file and populate the buffer."""
     global is_recording, start_time, connection_status, loaded_file_data, loaded_file_path
@@ -103,6 +147,7 @@ def load_file_data(file_path):
 
 def show_startup_dialog():
     """Show a dialog to select between live data and file mode."""
+    print("Select file for reading")
     global data_mode, loaded_file_path
     
     # Create hidden root window
@@ -126,7 +171,50 @@ def show_startup_dialog():
         # No file selected, use live mode
         data_mode = "live"
         root.destroy()
+def mode_selection_dialog():
+    """Show a dialog to select between live data, file mode, or wifi mode."""
+    print("Select data source")
+    global data_mode, loaded_file_path
 
+    root = tk.Tk()
+    root.title("Mode Selection")
+    root.geometry("260x160")
+
+    mode_var = tk.StringVar(value="file")
+
+    def on_mode_selected():
+        nonlocal root
+        selected = mode_var.get()
+        data_mode = selected
+
+        if selected == "file":
+            show_startup_dialog()
+
+        root.destroy()
+
+    frame = ttk.Frame(root, padding=12)
+    frame.pack(fill="both", expand=True)
+
+    label = ttk.Label(frame, text="Choose Mode")
+    label.pack(anchor="w", pady=(0, 6))
+
+    options = ["file", "live", "wifi"]
+    for opt in options:
+        rb = ttk.Radiobutton(
+            frame,
+            text=opt.capitalize(),
+            variable=mode_var,
+            value=opt,
+            command=on_mode_selected
+        )
+        rb.pack(anchor="w", pady=2)
+
+    root.mainloop()
+
+    # Keep data_mode in sync with selected option
+    if mode_var.get() in options:
+        data_mode = mode_var.get()
+        print(data_mode)
 # (simulation removed – real Arduino data only)
 def start_data_collection():
     """Start the background data collection thread."""
@@ -136,6 +224,10 @@ def start_data_collection():
     elif data_mode == "file" and loaded_file_path:
         # File already loaded in startup dialog
         pass
+    elif data_mode == "wifi":
+        # For simplicity, using fixed IP and port. In a real application, you might want to ask the user for these.
+        thread = threading.Thread(target=receive_wifi, args=(arduino_ip, arduino_port), daemon=True)
+        thread.start()
 
 # Create Dash app
 app = dash.Dash(__name__)
@@ -363,15 +455,18 @@ if __name__ == '__main__':
     # Show startup dialog to select mode
     # show_startup_dialog()
 
-    data_mode = "live" # Forcing live mode, I really don't like how the dialog function was implemented so for now I'll leave it like this
-    
+    # data_mode = "live" # Forcing live mode, I really don't like how the dialog function was implemented so for now I'll leave it like this
+    mode_selection_dialog()
+
     if data_mode == "live":
         print("\nData Source: REAL ARDUINO (LIVE)")
         print("Ensure the Arduino is connected and the correct COM port is specified.")
     elif data_mode == "file":
         print(f"\nData Source: FILE")
         print(f"Loaded file: {loaded_file_path}")
-    
+    elif data_mode == "wifi":
+        print("\nData Source: REAL ARDUINO (WIFI)")
+        print("Ensure the Arduino is connected to the same network and the correct IP/port are specified.")
     # Start background data collection
     start_data_collection()
     
